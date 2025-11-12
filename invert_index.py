@@ -38,6 +38,8 @@ logging.basicConfig(level=logging.DEBUG, format=fmt, handlers=[ch, fh], force=Tr
 # index: term -> {"df": int, "postings": {docid: [pos, ...]}}
 IndexType = Dict[str, Dict[str, dict]]
 
+index = defaultdict(lambda: {"df": 0, "postings": defaultdict(lambda: {"ft": [], "ft-idf": [], "pos": []})})
+
 def visible_text_from_soup(soup: BeautifulSoup) -> str:
     
     # Drop non-content tags
@@ -68,12 +70,19 @@ def visible_text_from_soup(soup: BeautifulSoup) -> str:
 
 def tokenize(text: str)->List[str]:
     words = re.findall(r"\b[A-Za-z0-9]{2,}\b", text)
-    # Stemming word
+   
     # Create a Porter Stemmer instance
     porter_stemmer = PorterStemmer()
     # Apply stemming to each word
     stemmed_words = [porter_stemmer.stem(word) for word in words]
     return stemmed_words
+def get_soup(content):
+    for parser in ("html5lib", "lxml", "html.parser"):
+        try:
+            return BeautifulSoup(content, parser)
+        except Exception:
+            continue
+        
 
 def extract_text(doc: dict) -> Tuple[str, str]:
     raw_url = doc.get("url") or ""
@@ -84,17 +93,16 @@ def extract_text(doc: dict) -> Tuple[str, str]:
         url = str(raw_url)
     content = doc.get("content")
     encoding = doc.get("encoding")
-
-    for parser in ("html5lib", "lxml", "html.parser"):
-        try:
-            soup = BeautifulSoup(content, parser)
-        except Exception:
-            continue
-    
-    #soup = BeautifulSoup(content, "html.parser")
-        
-    visible_text = visible_text_from_soup(soup)
-    tokens = tokenize(visible_text)
+    if isinstance(content, str) and content.strip():
+        soup = get_soup(content)
+    else:
+        soup = ""
+    # soup = get_soup(content)
+    if soup:  
+        visible_text = visible_text_from_soup(soup)
+        tokens = tokenize(visible_text)
+    else: 
+        tokens = ""
     return url, tokens, encoding
 
 def read_json_file(file:Path):
@@ -102,7 +110,7 @@ def read_json_file(file:Path):
         with file.open("r", encoding="utf-8", errors="ignore") as f:
             #doc = list(file.rglob("*.json"))
             doc = json.load(f) 
-        logging.info(f"file: {file}")
+        # logging.info(f"file: {file}")
        # logging.info(f"doc: {doc}")
         return doc
             
@@ -110,28 +118,56 @@ def read_json_file(file:Path):
         print ("TypeError for open json file ", {file})
         raise
 def build_inverted_index(root: Path):
-    docid = 0 #Every url have a unique document id
-    index = defaultdict(lambda: {"df": 0, "postings": defaultdict(lambda: {"ft": [], "ft-idf": [], "pos": []})})
+    max_num = 1000 #flush the dict every 1000 doc
+
     docurl: Dict[int, str] = {}
     doclen: Dict[int, int] = {}
+    dict_ids: List[int] = [] # store the id for every dict
+
+    dict_id = 0  #identify the if for every dict
+    doc_count = 0 # count the doc in a block
+    docid = 0 #Every url have a unique document id
 
     seen_url = set() # set for already seen url
     seen_token = set() #set for already seen content
+
+    def offload_dict(bin: int):
+        global index
+        
+        if not index:
+            return
+        
+        # save the dict to file
+        file_name = f"dict{bin}.json"
+        inverted_index = {}
+        for term in sorted(index.keys()): #keep every dict same order
+            inverted_index[term] = {
+                "df": int(index[term]["df"]),
+                "postings": index[term]["postings"]
+        }
+        try:
+            with open(file_name, 'w', encoding='utf-8') as f:
+                json.dump(inverted_index, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass 
+        index.clear()
+        dict_ids.append(bin)
 
     for file in root.rglob("*.json"): 
         doc = read_json_file(file)
         url, tokens, encoding = extract_text(doc)
 
-        logging.info(f"seen url: {seen_url}")
         # Remove duplicates content and seen url
         if url in seen_url:
             continue
         # Normalizing tokens so same content have the same hashes
         content = hashlib.blake2b(" ".join(tokens).encode("utf-8"), digest_size=16).hexdigest()
+        if content is None:
+            continue
         if content in seen_token:
             continue
+
         seen_token.add(content)
-        # logging.info(f"url and tokens: {url}, {tokens}")
         seen_url.add(url)
 
         docurl[docid] = url
@@ -150,37 +186,36 @@ def build_inverted_index(root: Path):
             index[term]["postings"][docid]["ft"].append(ft)
 
         docid += 1
+        doc_count += 1
+
+        if doc_count >= max_num:
+            offload_dict(dict_id)
+            dict_id +=1
+            doc_count = 0
+
+    offload_dict(dict_id)
 
     """
     # convert defaultdict to plain dicts
     inverted_index = {}
 
-    for term in sorted(index.keys()):
-        postings_map = index[term]["postings"]   # {docid: [pos...]}
+    for term in sorted(index.keys()): #keep every dict same order
+        # postings_map = index[term]["postings"]   # {docid: [pos...]}
         # sort docIDs and positions, and freeze as a list of pairs
-        postings_list = [[int(d), sorted(pos)]
-                        for d, pos in sorted(postings_map.items())]
+        # postings_list = [[int(d), sorted(pos)]
+                       # for d, pos in sorted(postings_map.items())]
         inverted_index[term] = {
             "df": int(index[term]["df"]),
             "postings": index[term]["postings"]
         }
 
-    logging.info(f"return index and url: {inverted_index}, {docurl}")  
+    # logging.info(f"return index and url: {inverted_index}, {docurl}")  
     """
     return index, docurl, doclen
         
 
 def save_index_json(inverted_index, docurl, doclen, file_name = "index_report.json"):
     logging.info("save index")
-
-    """
-    # covert the 
-    terms = {}
-    for term, data in inverted_index.items():
-        df = data["df"]
-        pos_list = [[int(id), pos] for id, pos in data["postings"].items()]
-        terms[term] = [df, pos_list]
-    """
     
     # calulate the ft-idf
     for term in inverted_index:
@@ -192,10 +227,10 @@ def save_index_json(inverted_index, docurl, doclen, file_name = "index_report.js
 
 
     report = {
-        "unique url": len(docurl),
+       #"unique url": len(docurl),
         "unique_term": len(inverted_index),
-        "doc_len": doclen,
-        "url_id": docurl,
+        #"doc_len": doclen,
+        #"url_id": docurl,
         "inverted_index": inverted_index
     }
     try:
@@ -204,24 +239,41 @@ def save_index_json(inverted_index, docurl, doclen, file_name = "index_report.js
     except Exception:
         pass 
 
-"""
-def parse_args():
-    p = argparse.ArgumentParser()
-    p.add_argument("--root", default=str(Path(__file__).parent / "DEV" / "aiclub_ics_uci_edu"),
-                   help="Path to dataset root containing JSON files")
-    p.add_argument("--out", default="index.json", help="Output index JSON file")
-    return p.parse_args()
-"""
+def save_unique_doc(docurl, file_name = "indexed_doc.json"):  
+    report = {
+        "unique url": len(docurl),
+        "id_url": docurl
+    }
+    try:
+        with open(file_name, 'w', encoding='utf-8') as f:
+            json.dump(report, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass 
+
+def save_doc_len(doclen, file_name = "doc_len.json"):
+    try:
+        with open(file_name, 'w', encoding='utf-8') as f:
+            json.dump(doclen, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass 
+def save_index_report():
+    for i in range(14):
+        file_name = f"dict{i}.json"
+        try:
+            with open(file_name, 'r', encoding='utf-8')as f:
+
+        except Exception:
+            pass
 
 def main():
-
-    # args = parse_args()
-    # root = Path(args.root)
-
-    root = Path("DEV/archive_ics_uci_edu")
+    root = Path("DEV")
     logging.info(f"root: {root}")
     inverted_index, docurl, doclen = build_inverted_index(root)
-    save_index_json(inverted_index, docurl, doclen)
+    # save_index_json(inverted_index, docurl, doclen)
+    save_unique_doc( docurl)
+    save_doc_len(doclen)
+    #merge_dict()
+    save_index_report()
 
 if __name__ == "__main__":
     main()
