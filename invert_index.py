@@ -38,7 +38,13 @@ logging.basicConfig(level=logging.DEBUG, format=fmt, handlers=[ch, fh], force=Tr
 # index: term -> {"df": int, "postings": {docid: [pos, ...]}}
 IndexType = Dict[str, Dict[str, dict]]
 
-index = defaultdict(lambda: {"df": 0, "postings": defaultdict(lambda: {"ft": [], "ft-idf": [], "pos": []})})
+index = defaultdict(lambda: {"df": 0, "postings": defaultdict(lambda: {"pos": [], "ft": [], "ft-idf": []})})
+
+seen_url = set() # set for already seen url
+seen_token = set() #set for already seen content
+unique_token = set()
+
+file_size = 0
 
 def visible_text_from_soup(soup: BeautifulSoup) -> str:
     
@@ -117,8 +123,29 @@ def read_json_file(file:Path):
     except TypeError:
         print ("TypeError for open json file ", {file})
         raise
+
+def sort_index(index):
+    inverted_index = {}
+    for term in sorted(index.keys()): #keep every dict same order
+        postings = index[term]["postings"]
+        # sorted in len first then doc id
+        sorted_postings = dict(
+            sorted(
+                postings.items(),
+                key=lambda item: (
+                    len(item[1]["pos"]),    # ascending length
+                    int(item[0])            # ascending docid as tie-breaker
+                )
+            )
+        )
+        inverted_index[term] = {
+            "df": int(index[term]["df"]),
+            "postings": sorted_postings
+    }
+    return inverted_index
+
 def build_inverted_index(root: Path):
-    max_num = 1000 #flush the dict every 1000 doc
+    max_num = 1500 #flush the dict every 1000 doc
 
     docurl: Dict[int, str] = {}
     doclen: Dict[int, int] = {}
@@ -128,32 +155,25 @@ def build_inverted_index(root: Path):
     doc_count = 0 # count the doc in a block
     docid = 0 #Every url have a unique document id
 
-    seen_url = set() # set for already seen url
-    seen_token = set() #set for already seen content
-
-    def offload_dict(bin: int):
+    def offload_dict(num: int):
         global index
         
         if not index:
             return
         
-        # save the dict to file
-        file_name = f"dict{bin}.json"
-        inverted_index = {}
-        for term in sorted(index.keys()): #keep every dict same order
-            inverted_index[term] = {
-                "df": int(index[term]["df"]),
-                "postings": index[term]["postings"]
-        }
-        try:
-            with open(file_name, 'w', encoding='utf-8') as f:
-                json.dump(inverted_index, f, indent=2, ensure_ascii=False)
-        except Exception:
-            pass 
+        # sorted the term in increasing len(pos)
+        inverted_index = sort_index(index)
+
+        # store partial index to file
+        file_name = f"dict{num}.json"       
+        with open(file_name, 'w', encoding='utf-8') as f:
+            json.dump(inverted_index, f,indent=2, ensure_ascii=False)
+       
         index.clear()
-        dict_ids.append(bin)
+        dict_ids.append(num)
 
     for file in root.rglob("*.json"): 
+        logging.info(f"file: {file}")
         doc = read_json_file(file)
         url, tokens, encoding = extract_text(doc)
 
@@ -162,6 +182,7 @@ def build_inverted_index(root: Path):
             continue
         # Normalizing tokens so same content have the same hashes
         content = hashlib.blake2b(" ".join(tokens).encode("utf-8"), digest_size=16).hexdigest()
+        
         if content is None:
             continue
         if content in seen_token:
@@ -177,6 +198,7 @@ def build_inverted_index(root: Path):
         for pos, term in enumerate(tokens):
             index[term]["postings"][docid]["pos"].append(pos)
             terms.add(term)
+            unique_token.add(term)
        
         # update the document frequent for each unique term of this file
         # and update the ft for each term in this document
@@ -194,26 +216,9 @@ def build_inverted_index(root: Path):
             doc_count = 0
 
     offload_dict(dict_id)
-
-    """
-    # convert defaultdict to plain dicts
-    inverted_index = {}
-
-    for term in sorted(index.keys()): #keep every dict same order
-        # postings_map = index[term]["postings"]   # {docid: [pos...]}
-        # sort docIDs and positions, and freeze as a list of pairs
-        # postings_list = [[int(d), sorted(pos)]
-                       # for d, pos in sorted(postings_map.items())]
-        inverted_index[term] = {
-            "df": int(index[term]["df"]),
-            "postings": index[term]["postings"]
-        }
-
-    # logging.info(f"return index and url: {inverted_index}, {docurl}")  
-    """
-    return index, docurl, doclen
+    return index, docurl, doclen, dict_ids
         
-
+"""
 def save_index_json(inverted_index, docurl, doclen, file_name = "index_report.json"):
     logging.info("save index")
     
@@ -238,7 +243,7 @@ def save_index_json(inverted_index, docurl, doclen, file_name = "index_report.js
             json.dump(report, f, indent=2, ensure_ascii=False)
     except Exception:
         pass 
-
+"""
 def save_unique_doc(docurl, file_name = "indexed_doc.json"):  
     report = {
         "unique url": len(docurl),
@@ -256,24 +261,127 @@ def save_doc_len(doclen, file_name = "doc_len.json"):
             json.dump(doclen, f, indent=2, ensure_ascii=False)
     except Exception:
         pass 
-def save_index_report():
-    for i in range(14):
-        file_name = f"dict{i}.json"
-        try:
-            with open(file_name, 'r', encoding='utf-8')as f:
 
-        except Exception:
-            pass
+def save_unique_token(file_name = "unique_token.txt"):
+    with open(file_name, 'w', encoding='utf-8') as f:
+        f.write(f"total unique tokens {len(unique_token)} \n")
+        for token in unique_token:
+            f.write(token + "  ")
+
+def merge_two_files(file_a, file_b, out_file):
+    a = read_json_file(file_a)
+    b = read_json_file(file_b)
+    logging.info(f"merge two file: {file_a}, and {file_b}")
+    merged = {}
+    all_terms = a.keys() | b.keys()
+
+    for term in all_terms:
+        postings_a = a.get(term, {}).get("postings", {})
+        postings_b = b.get(term, {}).get("postings", {})
+
+        merge_postings = postings_a
+        merge_postings.update(postings_b)
+        df = len(merge_postings)
+
+        sorted_postings = dict(
+            sorted(
+                merge_postings.items(),
+                key=lambda item: (
+                    len(item[1]["pos"]),    # ascending length
+                    int(item[0])            # ascending docid as tie-breaker
+                )
+            )
+        )
+
+        merged[term] = {
+            "df": df,
+            "postings": sorted_postings
+        }
+    with open(out_file, 'w', encoding='utf-8') as f:
+            json.dump(merged, f, indent=2, ensure_ascii=False)
+
+def merge_json(dict_ids):
+    round = 0
+    current_files = []
+    for num in dict_ids:
+        current_files.append(Path(f"dict{num}.json"))
+    logging.info(f"current_file: {current_files}")
+    while len(current_files)>1:
+        new_files = []
+        for i in range(0, len(current_files), 2):
+            if i + 1 == len(current_files):
+                new_files.append(current_files[i])
+            else:
+                a = current_files[i]
+                b = current_files[i+1]
+                out_file = Path(f"merged_round{round}_{i}.json")
+                merge_two_files(a, b, out_file)
+                new_files.append(out_file)
+        current_files = new_files
+        round += 1
+    final_json = current_files[0]
+    return final_json
+
+
+
+   
+def merge_json_to_jsonl(docurl, dict_ids):
+    final_json = merge_json(dict_ids)
+    merged_index = read_json_file(final_json)
+
+    #N = len(docurl)
+    N = docurl
+    lex = {}
+    offset = 0
+
+    jsonl_file = Path("invert_index.jsonl")
+    with    jsonl_file.open("wb") as wf:
+        for term in merged_index.keys():
+            postings = merged_index[term]["postings"]
+            df = len(postings)   
+            merged_index[term]["df"] = df
+
+            idf = math.log(N/df) 
+
+            for docid in postings.items():
+               # docid = int(docid_str)
+               #ft =  postings.get("ft")
+                ft = postings[docid]["ft"]
+               # positions = postings.get("pos")
+                postings[docid]["ft-idf"] = [ft * idf] 
+            rec = {
+                "t": term,
+                "df": df,
+                "postings": postings,
+            }
+
+            line = json.dumps(rec, ensure_ascii= False)
+            data = (line + "\n").encode("utf-8")
+            wf.write(data)
+
+            len[term] = {
+                "df": df,
+                "offset": offset,
+                "length": len(data),
+            }
+            offset += len(data)
+    lex_file ="lexicon.json"
+    with open(lex_file, 'w', encoding='utf-8') as f:
+            json.dump(lex, f, indent=2, ensure_ascii=False)
 
 def main():
+    """
     root = Path("DEV")
     logging.info(f"root: {root}")
-    inverted_index, docurl, doclen = build_inverted_index(root)
-    # save_index_json(inverted_index, docurl, doclen)
+    inverted_index, docurl, doclen, dict_ids = build_inverted_index(root)
+    #save_index_json(inverted_index, docurl, doclen)
     save_unique_doc( docurl)
     save_doc_len(doclen)
-    #merge_dict()
-    save_index_report()
-
+    save_unique_token()
+    """
+    dict_ids =[0,1,2,3,4,5,6,7,8,9]
+    docurl = 14813
+    merge_json_to_jsonl(docurl, dict_ids)
+    
 if __name__ == "__main__":
     main()
