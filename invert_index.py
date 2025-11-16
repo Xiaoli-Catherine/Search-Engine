@@ -58,14 +58,8 @@ def visible_text_from_soup(soup: BeautifulSoup) -> str:
         c.extract()
 
     # drop hidden elements (non-visible)
-    for el in soup.select('[hidden], [aria-hidden="true"]'):
+    for el in soup.select('[hidden], [aria-hidden="true"],[style*="display:none"], [style*="display: none"], [style*="visibility: hidden"], [style*="visibility:hidden"]'):
         el.decompose()
-
-    for el in soup.find_all(style=True):
-        style = el["style"].lower()
-        if ("display:none" in style or "display: none" in style or
-            "visibility:hidden" in style or "visibility: hidden" in style):
-            el.decompose()
     
     # Preserve line breaks where it matters
     # Replacing <br> with a newline so we can keep word separated.
@@ -75,7 +69,7 @@ def visible_text_from_soup(soup: BeautifulSoup) -> str:
     # Get visible text
     text = soup.get_text(separator=" ", strip=True)
     text = text.lower()
-    logging.info(f"visitable text: {text}")
+    # logging.info(f"visitable text: {text}")
     return text
 
 def tokenize(text: str)->List[str]:
@@ -113,7 +107,7 @@ def extract_text(doc: dict) -> Tuple[str, str]:
         tokens = tokenize(visible_text)
     else: 
         tokens = ""
-    logging.info(f"tokens: {tokens}")
+    #logging.info(f"tokens: {tokens}")
     return url, tokens, encoding
 
 def read_json_file(file:Path):
@@ -223,32 +217,6 @@ def build_inverted_index(root: Path):
     offload_dict(dict_id)
     return index, docurl, doclen, dict_ids
         
-"""
-def save_index_json(inverted_index, docurl, doclen, file_name = "index_report.json"):
-    logging.info("save index")
-    
-    # calulate the ft-idf
-    for term in inverted_index:
-        for doc_id in inverted_index[term]["postings"]:       
-            idf = math.log(len(docurl)/inverted_index[term]["df"])
-            tf = len(inverted_index[term]["postings"][doc_id]["pos"])/doclen[doc_id]
-            ft_idf = tf * float(idf)
-            inverted_index[term]["postings"][doc_id]["ft-idf"].append(ft_idf)
-
-
-    report = {
-       #"unique url": len(docurl),
-        "unique_term": len(inverted_index),
-        #"doc_len": doclen,
-        #"url_id": docurl,
-        "inverted_index": inverted_index
-    }
-    try:
-        with open(file_name, 'w', encoding='utf-8') as f:
-            json.dump(report, f, indent=2, ensure_ascii=False)
-    except Exception:
-        pass 
-"""
 def save_unique_doc(docurl, file_name = "indexed_doc.json"):  
     report = {
         "unique url": len(docurl),
@@ -337,6 +305,7 @@ def merge_json_to_jsonl(docurl, dict_ids):
     N = len(docurl)
     lex = {}
     offset = 0
+    high_fre_term=defaultdict(lambda:{"df": 0, "postings":{}})
 
     jsonl_file = Path("invert_index.jsonl")
     with jsonl_file.open("wb") as wf:
@@ -361,6 +330,10 @@ def merge_json_to_jsonl(docurl, dict_ids):
                 "postings": postings,
             }
 
+            if df >500:
+                high_fre_term[term]["df"] =df
+                high_fre_term[term]["postings"] = postings 
+
             line = json.dumps(rec, ensure_ascii= False)
             data = (line + "\n").encode("utf-8")
             wf.write(data)
@@ -373,11 +346,14 @@ def merge_json_to_jsonl(docurl, dict_ids):
             offset += len(data)
     lex_file ="lexicon.json"
     with open(lex_file, 'w', encoding='utf-8') as f:
-            json.dump(lex, f, indent=2, ensure_ascii=False)
-
+        json.dump(lex, f, indent=2, ensure_ascii=False)
+    high_fre_file = "high_fre_term.json"
+    with open(high_fre_file, 'w', encoding='utf-8') as f:
+        json.dump(dict(high_fre_term), f, indent=2, ensure_ascii=False)
+"""
 def main():
     
-    root = Path("DEV/alderis_ics_uci_edu")
+    root = Path("DEV")
     logging.info(f"root: {root}")
     inverted_index, docurl, doclen, dict_ids = build_inverted_index(root)
     #save_index_json(inverted_index, docurl, doclen)
@@ -388,3 +364,4 @@ def main():
     
 if __name__ == "__main__":
     main()
+"""
