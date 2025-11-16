@@ -58,20 +58,24 @@ def visible_text_from_soup(soup: BeautifulSoup) -> str:
         c.extract()
 
     # drop hidden elements (non-visible)
-    for el in soup.select('[hidden], [aria-hidden="true"], [style*="display:none"], [style*="visibility:hidden"]'):
+    for el in soup.select('[hidden], [aria-hidden="true"]'):
         el.decompose()
 
+    for el in soup.find_all(style=True):
+        style = el["style"].lower()
+        if ("display:none" in style or "display: none" in style or
+            "visibility:hidden" in style or "visibility: hidden" in style):
+            el.decompose()
+    
     # Preserve line breaks where it matters
     # Replacing <br> with a newline so we can keep word separated.
     for br in soup.find_all("br"):
         br.replace_with("\n")
-    for blk in soup.find_all(["p","li","div","h1","h2","h3","h4","h5","h6"]):
-        if blk.string is None:
-            blk.append("\n")
+    
     # Get visible text
-    text = soup.get_text(" ", strip=True)
+    text = soup.get_text(separator=" ", strip=True)
     text = text.lower()
-    # logging.info(f"visitable text: {text}")
+    logging.info(f"visitable text: {text}")
     return text
 
 def tokenize(text: str)->List[str]:
@@ -109,6 +113,7 @@ def extract_text(doc: dict) -> Tuple[str, str]:
         tokens = tokenize(visible_text)
     else: 
         tokens = ""
+    logging.info(f"tokens: {tokens}")
     return url, tokens, encoding
 
 def read_json_file(file:Path):
@@ -329,26 +334,27 @@ def merge_json_to_jsonl(docurl, dict_ids):
     final_json = merge_json(dict_ids)
     merged_index = read_json_file(final_json)
 
-    #N = len(docurl)
-    N = docurl
+    N = len(docurl)
     lex = {}
     offset = 0
 
     jsonl_file = Path("invert_index.jsonl")
-    with    jsonl_file.open("wb") as wf:
-        for term in merged_index.keys():
-            postings = merged_index[term]["postings"]
+    with jsonl_file.open("wb") as wf:
+        for term, value in merged_index.items():
+            postings = value["postings"]
             df = len(postings)   
-            merged_index[term]["df"] = df
+            value["df"] = df
 
             idf = math.log(N/df) 
 
-            for docid in postings.items():
-               # docid = int(docid_str)
-               #ft =  postings.get("ft")
-                ft = postings[docid]["ft"]
-               # positions = postings.get("pos")
-                postings[docid]["ft-idf"] = [ft * idf] 
+            for docid, posting in postings.items():
+                ft_list = posting["ft"]
+                if ft_list:
+                    ft = ft_list[0]
+                else:
+                    ft = 0.0
+                posting["ft-idf"] = [ft * idf] 
+            #record for jsonl file
             rec = {
                 "t": term,
                 "df": df,
@@ -359,7 +365,7 @@ def merge_json_to_jsonl(docurl, dict_ids):
             data = (line + "\n").encode("utf-8")
             wf.write(data)
 
-            len[term] = {
+            lex[term] = {
                 "df": df,
                 "offset": offset,
                 "length": len(data),
@@ -370,17 +376,14 @@ def merge_json_to_jsonl(docurl, dict_ids):
             json.dump(lex, f, indent=2, ensure_ascii=False)
 
 def main():
-    """
-    root = Path("DEV")
+    
+    root = Path("DEV/alderis_ics_uci_edu")
     logging.info(f"root: {root}")
     inverted_index, docurl, doclen, dict_ids = build_inverted_index(root)
     #save_index_json(inverted_index, docurl, doclen)
     save_unique_doc( docurl)
     save_doc_len(doclen)
     save_unique_token()
-    """
-    dict_ids =[0,1,2,3,4,5,6,7,8,9]
-    docurl = 14813
     merge_json_to_jsonl(docurl, dict_ids)
     
 if __name__ == "__main__":
