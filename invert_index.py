@@ -73,6 +73,7 @@ def visible_text_from_soup(soup: BeautifulSoup) -> str:
     return text
 
 def tokenize(text: str)->List[str]:
+    text = text.lower()
     words = re.findall(r"\b[A-Za-z0-9]{2,}\b", text)
    
     # Create a Porter Stemmer instance
@@ -128,15 +129,8 @@ def sort_index(index):
     for term in sorted(index.keys()): #keep every dict same order
         postings = index[term]["postings"]
         # sorted in len first then doc id
-        sorted_postings = dict(
-            sorted(
-                postings.items(),
-                key=lambda item: (
-                    len(item[1]["pos"]),    # ascending length
-                    int(item[0])            # ascending docid as tie-breaker
-                )
-            )
-        )
+        sorted_postings = dict(sorted(postings.items(),
+                                      key=lambda item: (int(item[0]))))                 
         inverted_index[term] = {
             "df": int(index[term]["df"]),
             "postings": sorted_postings
@@ -160,7 +154,6 @@ def build_inverted_index(root: Path):
         if not index:
             return
         
-        # sorted the term in increasing len(pos)
         inverted_index = sort_index(index)
 
         # store partial index to file
@@ -256,16 +249,10 @@ def merge_two_files(file_a, file_b, out_file):
         merge_postings.update(postings_b)
         df = len(merge_postings)
 
-        sorted_postings = dict(
-            sorted(
-                merge_postings.items(),
-                key=lambda item: (
-                    len(item[1]["pos"]),    # ascending length
-                    int(item[0])            # ascending docid as tie-breaker
-                )
-            )
-        )
-
+        # sort the postings by id
+        sorted_postings = dict(sorted(merge_postings.items(),
+                                      key=lambda item: (int(item[0]))))
+         
         merged[term] = {
             "df": df,
             "postings": sorted_postings
@@ -330,9 +317,14 @@ def merge_json_to_jsonl(docurl, dict_ids):
                 "postings": postings,
             }
 
+            """
             if df >500:
+                # skip any token that contains a digit anywhere
+                if any(ch.isdigit() for ch in term):
+                    continue
                 high_fre_term[term]["df"] =df
                 high_fre_term[term]["postings"] = postings 
+            """
 
             line = json.dumps(rec, ensure_ascii= False)
             data = (line + "\n").encode("utf-8")
@@ -347,9 +339,14 @@ def merge_json_to_jsonl(docurl, dict_ids):
     lex_file ="lexicon.json"
     with open(lex_file, 'w', encoding='utf-8') as f:
         json.dump(lex, f, indent=2, ensure_ascii=False)
+    
+    """
     high_fre_file = "high_fre_term.json"
     with open(high_fre_file, 'w', encoding='utf-8') as f:
         json.dump(dict(high_fre_term), f, indent=2, ensure_ascii=False)
+    logging.info(f"length is: {len(high_fre_term)}")
+    logging.info(f"high_fre_term: {high_fre_term.keys()}")
+    """
 """
 def main():
     

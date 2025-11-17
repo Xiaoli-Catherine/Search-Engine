@@ -25,5 +25,7 @@ if __name__ == "__main__":
         invert_index.save_unique_token()
         invert_index.merge_json_to_jsonl(docurl, dict_ids)
     else:
-        high_fre_term = load_high_fre_term("high_fre_term.json")
-        search.search_doc(query, high_fre_term)
+        query = " ".join(sys.argv[1:])
+        invert_index.logging.info(f"quesy: {query}")
+        # high_fre_term = load_high_fre_term("high_fre_term.json")
+        search.search_doc(query)
