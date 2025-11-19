@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 import json
+import io
 
 import invert_index
 import search
@@ -26,7 +27,18 @@ if __name__ == "__main__":
         invert_index.save_unique_token()
         invert_index.merge_json_to_jsonl(docurl, dict_ids)
     else:
-        query = " ".join(sys.argv[1:])
-        invert_index.logging.info(f"quesy: {query}")
+        # query = " ".join(sys.argv[1:])
         high_fre_term = load_high_fre_term("high_fre_term.json")
-        search.search_doc(query, high_fre_term)
+        print("="*60)
+        print("\nPlease into the query that you want to search\n")
+        print("If you want to log out, please input: quit\n" )
+        print("Please input your query: ")
+        query = input()
+        invert_index.logging.info(f"quesy: {query}")
+        while query != "quit":
+            search.search_doc(query, high_fre_term)
+            print("="*60)
+            print("\nPlease into the query that you want to search\n")
+            print("If you want to log out, please input: quit\n" )
+            print("Please input your query: ")
+            query = input()
