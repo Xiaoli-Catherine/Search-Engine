@@ -316,15 +316,13 @@ def merge_json_to_jsonl(docurl, dict_ids):
                 "df": df,
                 "postings": postings,
             }
-
-            """
+            
             if df >500:
                 # skip any token that contains a digit anywhere
                 if any(ch.isdigit() for ch in term):
                     continue
                 high_fre_term[term]["df"] =df
                 high_fre_term[term]["postings"] = postings 
-            """
 
             line = json.dumps(rec, ensure_ascii= False)
             data = (line + "\n").encode("utf-8")

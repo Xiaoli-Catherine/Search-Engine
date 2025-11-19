@@ -4,6 +4,7 @@ import json
 
 import invert_index
 import search
+import time
 
 def load_high_fre_term(path: Path):
     with open(path, 'r', encoding='utf-8') as f:
@@ -27,5 +28,5 @@ if __name__ == "__main__":
     else:
         query = " ".join(sys.argv[1:])
         invert_index.logging.info(f"quesy: {query}")
-        # high_fre_term = load_high_fre_term("high_fre_term.json")
-        search.search_doc(query)
+        high_fre_term = load_high_fre_term("high_fre_term.json")
+        search.search_doc(query, high_fre_term)
