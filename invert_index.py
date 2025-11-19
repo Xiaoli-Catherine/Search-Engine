@@ -282,8 +282,6 @@ def merge_json(dict_ids):
     final_json = current_files[0]
     return final_json
 
-
-
    
 def merge_json_to_jsonl(docurl, dict_ids):
     final_json = merge_json(dict_ids)
@@ -316,7 +314,8 @@ def merge_json_to_jsonl(docurl, dict_ids):
                 "df": df,
                 "postings": postings,
             }
-            
+
+            # store the data for high fre term
             if df >500:
                 # skip any token that contains a digit anywhere
                 if any(ch.isdigit() for ch in term):
@@ -324,27 +323,29 @@ def merge_json_to_jsonl(docurl, dict_ids):
                 high_fre_term[term]["df"] =df
                 high_fre_term[term]["postings"] = postings 
 
+            # write the data to jsonl
             line = json.dumps(rec, ensure_ascii= False)
             data = (line + "\n").encode("utf-8")
             wf.write(data)
 
+            #store data for lexicon search, 
+            #so we can quickly find the location of a term
             lex[term] = {
                 "df": df,
                 "offset": offset,
                 "length": len(data),
             }
-            offset += len(data)
+            offset += len(data)  #increace the offset (location)
     lex_file ="lexicon.json"
     with open(lex_file, 'w', encoding='utf-8') as f:
         json.dump(lex, f, indent=2, ensure_ascii=False)
-    
-    """
+      
     high_fre_file = "high_fre_term.json"
     with open(high_fre_file, 'w', encoding='utf-8') as f:
         json.dump(dict(high_fre_term), f, indent=2, ensure_ascii=False)
     logging.info(f"length is: {len(high_fre_term)}")
     logging.info(f"high_fre_term: {high_fre_term.keys()}")
-    """
+  
 """
 def main():
     
