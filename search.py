@@ -1,10 +1,18 @@
 import sys
 import json
 from pathlib import Path
+from collections import Counter, defaultdict
+import math
 import time
 
 import invert_index
-def read_invert_index(tokens, lex, result, docid_lists):
+
+"""
+******************************
+read invert index from files
+******************************
+"""
+def read_invert_index(tokens, lex, result, docid_lists, df):
     """
     Read the term's data from the disk file invert_index.jsonl
     """
@@ -28,12 +36,13 @@ def read_invert_index(tokens, lex, result, docid_lists):
                 docids = sorted(int(d) for d in postings.keys()) #change the docid to int
                 docid_lists.append((token, docids))
                 result[token] = postings
+                df[token] = rec["df"]
             else:
                 print("no such term in the storage")
 
-    return result, docid_lists
+    return result, docid_lists, df
 
-def load_terms_from_index(tokens, high_fre_term):
+def load_terms_from_index(tokens, high_fre_term, lex_data):
     """
     Try to find the terms from the in-memory dict: high_fre_term first
     Then, looking for the remaining tokens in the disk file
@@ -44,6 +53,7 @@ def load_terms_from_index(tokens, high_fre_term):
     #     lex = json.load(f)
     remain_tokens = []
     docid_lists = [] 
+    df = {}
     result = {}
         
     # result, docid_lists = read_invert_index(tokens, lex, result, docid_lists)
@@ -53,6 +63,7 @@ def load_terms_from_index(tokens, high_fre_term):
 
     for token in tokens:
         if token in high_fre_term:
+            df[token] = high_fre_term[token]["df"]
             postings = high_fre_term[token]["postings"]
             docids = sorted(int(d) for d in postings.keys()) #change the docid to int
             docid_lists.append ((token, docids))
@@ -61,15 +72,17 @@ def load_terms_from_index(tokens, high_fre_term):
             remain_tokens.append(token)
     print(f"remain_tokens: {remain_tokens}")
     if remain_tokens:
-        # load lexicon for term position 
-        lex = {}
-        with open("lexicon.json", "r", encoding="utf-8") as f:
-            lex = json.load(f)
-        result, docid_lists = read_invert_index(remain_tokens, lex, result, docid_lists)
+        result, docid_lists, df = read_invert_index(remain_tokens, lex_data, result, docid_lists, df)
     #sorted the docid list, so fewer docs come first
     sorted_docid_lists = sorted(docid_lists, key=lambda pair: len(pair[1]))
-    return result, sorted_docid_lists
+    return result, sorted_docid_lists, df
     
+"""
+******************************
+Boolean search
+******************************
+"""
+
 def match_two_lists(listA, listB):
     """
     Compare two list to find the common id
@@ -106,7 +119,7 @@ def find_posible_id(term_id_list):
 
         if not current: # no common docid
             break
-    print(f"current: {current}")
+    # print(f"current: {current}")
     return current
 
 def sort_by_tf_idf(posible_id, tokens, term_postings):
@@ -117,17 +130,52 @@ def sort_by_tf_idf(posible_id, tokens, term_postings):
     # init scores
     scores = {doc_id: 0.0 for doc_id in posible_id}
 
-    for token in tokens:
-        postings = term_postings[token]
-        for doc_id in posible_id:
-            doc = str(doc_id)
-            tf_idf = postings[doc]["ft-idf"][0]
-            scores[doc_id] += tf_idf
+    #computer the sum tf-idf score for all posible-id that given the query
+    for doc_id in posible_id:
+        for token in tokens:
+            if token in term_postings:
+                postings = term_postings[token]
+                doc = str(doc_id)
+                tf_idf = postings[doc]["tf-idf"][0]
+                scores[doc_id] += tf_idf
+
     
+    #sorted the id so order in decreasing order
     sorted_id = sorted(posible_id, key=lambda doc_id: scores[doc_id], reverse = True)
     return sorted_id
 
-def search_doc(query: str, high_fre_term):
+"""
+******************************
+Ranked search
+******************************
+"""
+def ranked_search(term_id_list, term_postings, query, n, df):
+    
+    tf_q = Counter(query)
+    scores = defaultdict(float)  
+    doc_norm = defaultdict(float)
+
+    # accumulate doc product: sum_t:  tf_idf_q * tf_idf_d
+    for token, tf in tf_q.items():
+        if token not in term_postings:
+            continue
+        tf_idf_q = (1+math.log(tf))*math.log(n/df[token])
+        postings = term_postings[token] 
+        for d_key, info in postings.items():
+            tf_idf_d = info["tf-idf"][0] 
+            d = int(d_key)
+            scores[d] += tf_idf_q * tf_idf_d
+            doc_norm[d] += tf_idf_d * tf_idf_d
+
+    for d in doc_norm:
+        doc_norm[d] = math.sqrt(doc_norm[d])
+    for d in scores:
+        scores[d] = scores[d]/doc_norm[d]
+
+    scores = sorted(scores, key=lambda d: scores[d], reverse = True)
+    return scores
+
+def search_doc(query: str, high_fre_term, url_data, lex_data, doc_len):
     """
     for each quest, seaching for the posible page 
     and print out the top 5 url
@@ -137,21 +185,18 @@ def search_doc(query: str, high_fre_term):
 
     tokens = invert_index.tokenize(query)
     invert_index.logging.info(f"tokens: {tokens}")
-    term_postings, term_id_list = load_terms_from_index(tokens, high_fre_term)
+    term_postings, term_id_list, df = load_terms_from_index(tokens, high_fre_term, lex_data)
  #   invert_index.logging.info(f"term_id_list: {term_id_list}")
+   
+   # ranked search
+    # n = len(url_data)
+    # sorted_id = ranked_search(term_id_list,term_postings,tokens, n, df)
     
+    # boolean search
     posible_id = find_posible_id(term_id_list)
-
     sorted_id = sort_by_tf_idf(posible_id, tokens, term_postings)
     
-    # print(f"posible_id: {posible_id}")
-    # if len(posible_id) > 5:
-    #     posible_id = posible_id[:5]
-
-    url_file = "indexed_doc.json"
-    with open(url_file, "r", encoding='utf-8') as f:
-        data = json.load(f)
-    id_url = data["id_url"]
+    id_url = url_data["id_url"]
     url_list = []
     for docid in sorted_id[:5]:
         doc_url = id_url[str(docid)]
@@ -162,6 +207,4 @@ def search_doc(query: str, high_fre_term):
     print(f"Query processed in {elapsed_ms:.3f} ms")
 
 
-    
-    
 

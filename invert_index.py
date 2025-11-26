@@ -38,15 +38,19 @@ logging.basicConfig(level=logging.DEBUG, format=fmt, handlers=[ch, fh], force=Tr
 # index: term -> {"df": int, "postings": {docid: [pos, ...]}}
 IndexType = Dict[str, Dict[str, dict]]
 
-index = defaultdict(lambda: {"df": 0, "postings": defaultdict(lambda: {"pos": [], "ft": [], "ft-idf": []})})
-
+index = defaultdict(lambda: {"df": 0, "postings": defaultdict(lambda: {"pos": [], "tf": [], "tf-idf": [], "wt":0.0})})
+dict_ids = [] # store the id for every dict
 seen_url = set() # set for already seen url
 seen_token = set() #set for already seen content
 unique_token = set()
 
 file_size = 0
 
-def visible_text_from_soup(soup: BeautifulSoup) -> str:
+def clean_soup(soup: BeautifulSoup):
+    """
+    Find visible text from soup by Drop non-content tags, 
+    comments and hidden element
+    """
     
     # Drop non-content tags
     # Remove JS/CSS/inert markup, Cuts menus/footers
@@ -66,11 +70,12 @@ def visible_text_from_soup(soup: BeautifulSoup) -> str:
     for br in soup.find_all("br"):
         br.replace_with("\n")
     
-    # Get visible text
-    text = soup.get_text(separator=" ", strip=True)
-    text = text.lower()
-    # logging.info(f"visitable text: {text}")
-    return text
+
+    # # Get visible text
+    # text = soup.get_text(separator=" ", strip=True)
+    # text = text.lower()
+    # # logging.info(f"visitable text: {text}")
+    # return text
 
 def tokenize(text: str)->List[str]:
     text = text.lower()
@@ -80,16 +85,44 @@ def tokenize(text: str)->List[str]:
     porter_stemmer = PorterStemmer()
     # Apply stemming to each word
     stemmed_words = [porter_stemmer.stem(word) for word in words]
-    return stemmed_words
-def get_soup(content):
-    for parser in ("html5lib", "lxml", "html.parser"):
-        try:
-            return BeautifulSoup(content, parser)
-        except Exception:
-            continue
-        
+    return stemmed_words  
 
-def extract_text(doc: dict) -> Tuple[str, str]:
+def get_weight(text_node) -> int:
+    weight = 1 # default body
+
+    for parent in text_node.parents:
+        if not getattr(parent, "name", None):
+            continue
+        name = parent.name.lower()
+
+        if name == "title":
+            return 4
+        if name in ("h1", "h2", "h3"):
+            weight = 3
+        if name == "strong":
+            weight = 2
+    return weight
+
+def weighted_tokens_from_soup(soup: BeautifulSoup):
+    clean_soup(soup)
+
+    pos = 0
+    result: list[tuple[str, int, int]] = []
+
+    for text_node in soup.find_all(string = True):
+        # skip empty text
+        if not text_node.strip():
+            continue
+        weight = get_weight(text_node)
+        tokens = tokenize(str(text_node))
+
+        for token in tokens:
+            result.append((token, pos, weight))
+            pos += 1
+    return result
+
+
+def extract_text(doc: dict):
     raw_url = doc.get("url") or ""
     try:
         # remove fragment for url
@@ -99,17 +132,20 @@ def extract_text(doc: dict) -> Tuple[str, str]:
     content = doc.get("content")
     encoding = doc.get("encoding")
     if isinstance(content, str) and content.strip():
-        soup = get_soup(content)
+        # use html5lib for break html
+        soup = BeautifulSoup(content, "html5lib")
     else:
         soup = ""
     # soup = get_soup(content)
     if soup:  
-        visible_text = visible_text_from_soup(soup)
-        tokens = tokenize(visible_text)
+        weighted_tokens = weighted_tokens_from_soup(soup)
+        # visible_text = visible_text_from_soup(soup)
+       # tokens = tokenize(visible_text)
     else: 
-        tokens = ""
+        weighted_tokens = []
+        #tokens = ""
     #logging.info(f"tokens: {tokens}")
-    return url, tokens, encoding
+    return url, weighted_tokens, encoding
 
 def read_json_file(file:Path):
     try: 
@@ -136,26 +172,18 @@ def sort_index(index):
             "postings": sorted_postings
     }
     return inverted_index
-
-def build_inverted_index(root: Path):
-    max_num = 1500 #flush the dict every 1000 doc
-
-    docurl: Dict[int, str] = {}
-    doclen: Dict[int, int] = {}
-    dict_ids: List[int] = [] # store the id for every dict
-
-    dict_id = 0  #identify the if for every dict
-    doc_count = 0 # count the doc in a block
-    docid = 0 #Every url have a unique document id
-
-    def offload_dict(num: int):
-        global index
+"""
+*****************************
+offload partial index to disk
+*****************************
+"""
+def offload_dict(num: int):
+        global index, dict_ids
         
         if not index:
             return
         
         inverted_index = sort_index(index)
-
         # store partial index to file
         file_name = f"dict{num}.json"       
         with open(file_name, 'w', encoding='utf-8') as f:
@@ -164,40 +192,72 @@ def build_inverted_index(root: Path):
         index.clear()
         dict_ids.append(num)
 
+
+def remove_duplicate(url, tokens):
+    # Remove duplicates content and seen url
+    if url in seen_url:
+        return False
+    # Normalizing tokens so same content have the same hashes so I can add to a set
+    content = hashlib.blake2b(" ".join(tokens).encode("utf-8"), digest_size=16).hexdigest()
+    
+    if content is None:
+        False
+    if content in seen_token:
+        False
+    return True
+
+
+def build_inverted_index(root: Path):
+    max_num = 1500 #flush the dict every 1000 doc
+
+    docurl: Dict[int, str] = {}
+    doclen: Dict[int, int] = {}
+
+    dict_id = 0  #identify the if for every dict
+    doc_count = 0 # count the doc in a block
+    docid = 0 #Every url have a unique document id
+
     for file in root.rglob("*.json"): 
         logging.info(f"file: {file}")
         doc = read_json_file(file)
-        url, tokens, encoding = extract_text(doc)
+        url, weighted_tokens, encoding = extract_text(doc)
 
-        # Remove duplicates content and seen url
-        if url in seen_url:
+        if not weighted_tokens:
             continue
-        # Normalizing tokens so same content have the same hashes
-        content = hashlib.blake2b(" ".join(tokens).encode("utf-8"), digest_size=16).hexdigest()
+
+        tokens_for_hash = [t for (t, _, _) in weighted_tokens]
+        # Normalizing tokens so same content have the same hashes so I can add to a set
+        content = hashlib.blake2b(" ".join(tokens_for_hash).encode("utf-8"), digest_size=16).hexdigest()
         
-        if content is None:
-            continue
-        if content in seen_token:
+        # Remove duplicates content and seen url
+        if not remove_duplicate(url, content):
             continue
 
         seen_token.add(content)
         seen_url.add(url)
 
         docurl[docid] = url
-        doclen[docid] = len(tokens)
+        doclen[docid] = len(tokens_for_hash)
         #store the positions for each term in this document
-        terms= set()
-        for pos, term in enumerate(tokens):
+        terms_in_doc= set()
+        for term, pos, weight in weighted_tokens:
             index[term]["postings"][docid]["pos"].append(pos)
-            terms.add(term)
+            index[term]["postings"][docid]["wt"] +=  weight
+            terms_in_doc.add(term)
             unique_token.add(term)
        
         # update the document frequent for each unique term of this file
-        # and update the ft for each term in this document
-        for term in terms:
+        # and update the tf for each term in this document
+        for term in terms_in_doc:
             index[term]["df"] += 1
-            ft = len(index[term]["postings"][docid]["pos"])/doclen[docid]
-            index[term]["postings"][docid]["ft"].append(ft)
+            raw_wt = index[term]["postings"][docid]["wt"]
+            # tf_row = len(index[term]["postings"][docid]["pos"])
+            if raw_wt > 0:
+                tf = 1+math.log(raw_wt)
+            else:
+                tf = 0.0
+            # tf = len(index[term]["postings"][docid]["pos"])/doclen[docid]
+            index[term]["postings"][docid]["tf"].append(tf)
 
         docid += 1
         doc_count += 1
@@ -210,29 +270,14 @@ def build_inverted_index(root: Path):
     offload_dict(dict_id)
     return index, docurl, doclen, dict_ids
         
-def save_unique_doc(docurl, file_name = "indexed_doc.json"):  
-    report = {
-        "unique url": len(docurl),
-        "id_url": docurl
-    }
-    try:
-        with open(file_name, 'w', encoding='utf-8') as f:
-            json.dump(report, f, indent=2, ensure_ascii=False)
-    except Exception:
-        pass 
 
-def save_doc_len(doclen, file_name = "doc_len.json"):
-    try:
-        with open(file_name, 'w', encoding='utf-8') as f:
-            json.dump(doclen, f, indent=2, ensure_ascii=False)
-    except Exception:
-        pass 
 
-def save_unique_token(file_name = "unique_token.txt"):
-    with open(file_name, 'w', encoding='utf-8') as f:
-        f.write(f"total unique tokens {len(unique_token)} \n")
-        for token in unique_token:
-            f.write(token + "  ")
+"""
+*********************************
+Merging partial indexes
+*********************************
+"""
+
 
 def merge_two_files(file_a, file_b, out_file):
     a = read_json_file(file_a)
@@ -302,12 +347,12 @@ def merge_json_to_jsonl(docurl, dict_ids):
             idf = math.log(N/df) 
 
             for docid, posting in postings.items():
-                ft_list = posting["ft"]
-                if ft_list:
-                    ft = ft_list[0]
+                tf_list = posting["tf"]
+                if tf_list:
+                    tf = tf_list[0]
                 else:
-                    ft = 0.0
-                posting["ft-idf"] = [ft * idf] 
+                    tf = 0.0
+                posting["tf-idf"] = [tf * idf] 
             #record for jsonl file
             rec = {
                 "t": term,
@@ -316,7 +361,7 @@ def merge_json_to_jsonl(docurl, dict_ids):
             }
 
             # store the data for high fre term
-            if df >500:
+            if df >1000:
                 # skip any token that contains a digit anywhere
                 if any(ch.isdigit() for ch in term):
                     continue
@@ -347,17 +392,31 @@ def merge_json_to_jsonl(docurl, dict_ids):
     logging.info(f"high_fre_term: {high_fre_term.keys()}")
   
 """
-def main():
-    
-    root = Path("DEV")
-    logging.info(f"root: {root}")
-    inverted_index, docurl, doclen, dict_ids = build_inverted_index(root)
-    #save_index_json(inverted_index, docurl, doclen)
-    save_unique_doc( docurl)
-    save_doc_len(doclen)
-    save_unique_token()
-    merge_json_to_jsonl(docurl, dict_ids)
-    
-if __name__ == "__main__":
-    main()
+*********************************
+Save to file
+*********************************
 """
+
+def save_unique_doc(docurl, file_name = "indexed_doc.json"):  
+    report = {
+        "unique url": len(docurl),
+        "id_url": docurl
+    }
+    try:
+        with open(file_name, 'w', encoding='utf-8') as f:
+            json.dump(report, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass 
+
+def save_doc_len(doclen, file_name = "doc_len.json"):
+    try:
+        with open(file_name, 'w', encoding='utf-8') as f:
+            json.dump(doclen, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass 
+
+def save_unique_token(file_name = "unique_token.txt"):
+    with open(file_name, 'w', encoding='utf-8') as f:
+        f.write(f"total unique tokens {len(unique_token)} \n")
+        for token in unique_token:
+            f.write(token + "  ")
