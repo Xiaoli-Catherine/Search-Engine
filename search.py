@@ -7,6 +7,7 @@ import time
 
 import invert_index
 
+
 """
 ******************************
 read invert index from files
@@ -136,7 +137,7 @@ def sort_by_tf_idf(posible_id, tokens, term_postings):
             if token in term_postings:
                 postings = term_postings[token]
                 doc = str(doc_id)
-                tf_idf = postings[doc]["tf-idf"][0]
+                tf_idf = postings[doc]["tf-idf"]
                 scores[doc_id] += tf_idf
 
     
@@ -149,31 +150,148 @@ def sort_by_tf_idf(posible_id, tokens, term_postings):
 Ranked search
 ******************************
 """
-def ranked_search(term_id_list, term_postings, query, n, df):
+def consine_score(term_postings, query, n, df):
     
     tf_q = Counter(query)
     scores = defaultdict(float)  
     doc_norm = defaultdict(float)
-
+    
+   
     # accumulate doc product: sum_t:  tf_idf_q * tf_idf_d
-    for token, tf in tf_q.items():
+    for token, tf in tf_q.items():      
         if token not in term_postings:
             continue
         tf_idf_q = (1+math.log(tf))*math.log(n/df[token])
-        postings = term_postings[token] 
+        # at least one term happened in the document
+        postings = term_postings[token]       
         for d_key, info in postings.items():
-            tf_idf_d = info["tf-idf"][0] 
-            d = int(d_key)
-            scores[d] += tf_idf_q * tf_idf_d
-            doc_norm[d] += tf_idf_d * tf_idf_d
-
+            tf_idf_d = info["tf-idf"]
+            # d = int(d_key)
+            scores[d_key] += tf_idf_q * tf_idf_d
+            doc_norm[d_key] += tf_idf_d * tf_idf_d
+        
     for d in doc_norm:
         doc_norm[d] = math.sqrt(doc_norm[d])
     for d in scores:
         scores[d] = scores[d]/doc_norm[d]
 
-    scores = sorted(scores, key=lambda d: scores[d], reverse = True)
+    # scores = sorted(scores, key=lambda d: scores[d], reverse = True)
     return scores
+
+def get_id_list(term_id_list):
+    id_list = set()
+    for key, value in term_id_list:
+        for v in value:
+            id_list.add(v)
+    return id_list
+
+"""
+********************
+Sum of tfidf * (1+ field_weight)
+********************
+"""
+def sum_of_tf_idf(term_id_list, term_postings, query):
+    unique_q = set(query)
+    sum_of_tfidf_weight = defaultdict(float)
+    # id_list = get_id_list(term_id_list)
+    for token in unique_q:      
+        if token not in term_postings:
+            continue
+        postings = term_postings[token]       
+        for d_key, info in postings.items():
+            tfidf = info["tf-idf"] 
+            weight = info["wt"]
+            sum_of_tfidf_weight[d_key] += tfidf * (1 + weight)
+    return sum_of_tfidf_weight   
+
+"""
+************************
+bata * sum_tfidf + (1-bata)* cos_score, 
+set bata = 0.5 to give equal weight to term frequency 
+(sum of tf-idf) and vector similarity (cosine) 
+************************
+"""    
+def calculate_balance_weight(cos_score, sum_tfidf):
+    bata = 0.5
+    weight_tfidf_and_soc = defaultdict()
+    for key, value in cos_score.items():
+        weight_tfidf_and_soc[key] = bata*sum_tfidf[key] + (1-bata)*cos_score[key]
+    return weight_tfidf_and_soc
+
+"""
+**************************
+calculate the "phrase weight" that the query q in the document D, 
+compare every two tokens,if they happened in the same order in a document
+**************************
+"""
+def get_phrase_weight(term_id_list, term_postings, query):
+    if len(query) <= 1:
+        return {}
+    phrase_weight = defaultdict()
+    
+    id_list = get_id_list(term_id_list)
+    # for every doc, check phrase_hits
+    for id in id_list:
+        phrase_hits = 0
+        key_id = str(id)
+        for i in range(len(query)-1):
+            token1 = query[i]
+            token2 = query[i+1]
+            posting1 = term_postings[token1]
+            posting2 = term_postings[token2]
+
+            # no document have the token
+            if not posting1 or not posting2:
+                continue
+
+            #check if the doc include this token
+            info1 = posting1.get(key_id)
+            info2 = posting2.get(key_id)
+            if not info1 or not info2:
+                continue
+            pos1 = info1["pos"]
+            pos2 = info2["pos"]
+
+            if not pos1 or not pos2:
+                continue
+
+            for p in pos1:
+                if(p+1) in pos2:
+                    phrase_hits += 1
+                    break
+        phrase_weight[key_id] = phrase_hits
+    return phrase_weight
+
+
+def calculate_result(weight_tfidf_and_soc, phrase_weight):
+    result = {}
+    for id in weight_tfidf_and_soc:
+        tfidf_and_soc = weight_tfidf_and_soc[id]
+        phrase = phrase_weight.get(id, 0.0)
+        result[id] =  tfidf_and_soc * (1+ phrase) 
+    return result
+    
+"""
+**********************
+S(q, D) = [bata * sum_of_tfidf * (1+ field_weight) + (1-bata) * cos(q, D)] * (1+ phrase_weight)
+set bata = 0.5
+**********************
+"""      
+def ranked_search(term_id_list, term_postings, query, n, df):
+    cos_score = consine_score(term_postings, query, n, df)
+    sum_tfidf = sum_of_tf_idf(term_id_list, term_postings, query)
+    
+    # bata * sum_tfidf + (1-bata)* cos_score, 
+    # set bata = 0.5 to give equal weight to term frequency (sum of tf-idf) and vector similarity (cosine) 
+    weight_tfidf_and_soc = calculate_balance_weight(cos_score, sum_tfidf)
+
+    phrase_weight = get_phrase_weight(term_id_list, term_postings, query)
+    
+    final_result = calculate_result(weight_tfidf_and_soc, phrase_weight)
+
+    final_result = sorted(final_result, key=lambda d: final_result[d], reverse = True)
+    return final_result
+
 
 def search_doc(query: str, high_fre_term, url_data, lex_data, doc_len):
     """
@@ -189,12 +307,12 @@ def search_doc(query: str, high_fre_term, url_data, lex_data, doc_len):
  #   invert_index.logging.info(f"term_id_list: {term_id_list}")
    
    # ranked search
-    # n = len(url_data)
-    # sorted_id = ranked_search(term_id_list,term_postings,tokens, n, df)
+    n = len(url_data)
+    sorted_id = ranked_search(term_id_list,term_postings,tokens, n, df)
     
     # boolean search
-    posible_id = find_posible_id(term_id_list)
-    sorted_id = sort_by_tf_idf(posible_id, tokens, term_postings)
+    # posible_id = find_posible_id(term_id_list)
+    # sorted_id = sort_by_tf_idf(posible_id, tokens, term_postings)
     
     id_url = url_data["id_url"]
     url_list = []

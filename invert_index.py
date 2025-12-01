@@ -38,7 +38,7 @@ logging.basicConfig(level=logging.DEBUG, format=fmt, handlers=[ch, fh], force=Tr
 # index: term -> {"df": int, "postings": {docid: [pos, ...]}}
 IndexType = Dict[str, Dict[str, dict]]
 
-index = defaultdict(lambda: {"df": 0, "postings": defaultdict(lambda: {"pos": [], "tf": [], "tf-idf": [], "wt":0.0})})
+index = defaultdict(lambda: {"df": 0, "postings": defaultdict(lambda: {"pos": [], "tf": 0.0, "tf-idf": 0.0, "wt":0.0})})
 dict_ids = [] # store the id for every dict
 seen_url = set() # set for already seen url
 seen_token = set() #set for already seen content
@@ -88,7 +88,7 @@ def tokenize(text: str)->List[str]:
     return stemmed_words  
 
 def get_weight(text_node) -> int:
-    weight = 1 # default body
+    weight = 0 # default body
 
     for parent in text_node.parents:
         if not getattr(parent, "name", None):
@@ -96,11 +96,11 @@ def get_weight(text_node) -> int:
         name = parent.name.lower()
 
         if name == "title":
-            return 4
-        if name in ("h1", "h2", "h3"):
             weight = 3
-        if name == "strong":
+        elif name in ("h1", "h2", "h3"):
             weight = 2
+        elif name == "strong":
+            weight = 1
     return weight
 
 def weighted_tokens_from_soup(soup: BeautifulSoup):
@@ -164,7 +164,7 @@ def sort_index(index):
     inverted_index = {}
     for term in sorted(index.keys()): #keep every dict same order
         postings = index[term]["postings"]
-        # sorted in len first then doc id
+        # sorted by docid key: docid, value: {"pos","tf"...}
         sorted_postings = dict(sorted(postings.items(),
                                       key=lambda item: (int(item[0]))))                 
         inverted_index[term] = {
@@ -250,14 +250,14 @@ def build_inverted_index(root: Path):
         # and update the tf for each term in this document
         for term in terms_in_doc:
             index[term]["df"] += 1
-            raw_wt = index[term]["postings"][docid]["wt"]
-            # tf_row = len(index[term]["postings"][docid]["pos"])
-            if raw_wt > 0:
-                tf = 1+math.log(raw_wt)
+            # raw_wt = index[term]["postings"][docid]["wt"]
+            tf_row = len(index[term]["postings"][docid]["pos"])
+            if tf_row > 0:
+                tf = 1+math.log(tf_row)
             else:
                 tf = 0.0
             # tf = len(index[term]["postings"][docid]["pos"])/doclen[docid]
-            index[term]["postings"][docid]["tf"].append(tf)
+            index[term]["postings"][docid]["tf"] = tf
 
         docid += 1
         doc_count += 1
@@ -284,7 +284,7 @@ def merge_two_files(file_a, file_b, out_file):
     b = read_json_file(file_b)
     logging.info(f"merge two file: {file_a}, and {file_b}")
     merged = {}
-    all_terms = a.keys() | b.keys()
+    all_terms = sorted(a.keys() | b.keys())
 
     for term in all_terms:
         postings_a = a.get(term, {}).get("postings", {})
@@ -347,12 +347,12 @@ def merge_json_to_jsonl(docurl, dict_ids):
             idf = math.log(N/df) 
 
             for docid, posting in postings.items():
-                tf_list = posting["tf"]
-                if tf_list:
-                    tf = tf_list[0]
-                else:
-                    tf = 0.0
-                posting["tf-idf"] = [tf * idf] 
+                tf = posting["tf"]
+                # if tf_list:
+                #     tf = tf_list[0]
+                # else:
+                #     tf = 0.0
+                posting["tf-idf"] = tf * idf
             #record for jsonl file
             rec = {
                 "t": term,
