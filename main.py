@@ -34,11 +34,14 @@ if __name__ == "__main__":
         print("If you want to log out, please input: quit\n" )
         print("Please input your query: ")
         query = input()
-        invert_index.logging.info(f"quesy: {query}")
+        # invert_index.logging.info(f"quesy: {query}")
         while query != "quit":
+            print("\n****Searching for results****\n")
+            print("="*60)
             search.search_doc(query, high_fre_term, url_data, lex_data, doc_len)
             print("="*60)
             print("\nPlease into the query that you want to search\n")
             print("If you want to log out, please input: quit\n" )
             print("Please input your query: ")
             query = input()
+            

@@ -319,9 +319,13 @@ def search_doc(query: str, high_fre_term, url_data, lex_data, doc_len):
     for docid in sorted_id[:5]:
         doc_url = id_url[str(docid)]
         url_list.append(doc_url)
-    print(f"top 5 url is: {url_list}")
+
+    print("="*60)
+    print(f"\nTop 5 url is: {url_list}\n")
+
     end = time.perf_counter()
     elapsed_ms = (end - start) * 1000  # seconds → ms
+    
     print(f"Query processed in {elapsed_ms:.3f} ms")
 
 
