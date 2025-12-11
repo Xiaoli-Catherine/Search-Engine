@@ -196,15 +196,15 @@ def offload_dict(num: int):
 def remove_duplicate(url, tokens):
     # Remove duplicates content and seen url
     if url in seen_url:
-        return False
+        return True
     # Normalizing tokens so same content have the same hashes so I can add to a set
     content = hashlib.blake2b(" ".join(tokens).encode("utf-8"), digest_size=16).hexdigest()
     
     if content is None:
-        False
+        True
     if content in seen_token:
-        False
-    return True
+        True
+    return False
 
 
 def build_inverted_index(root: Path):
@@ -230,7 +230,7 @@ def build_inverted_index(root: Path):
         content = hashlib.blake2b(" ".join(tokens_for_hash).encode("utf-8"), digest_size=16).hexdigest()
         
         # Remove duplicates content and seen url
-        if not remove_duplicate(url, content):
+        if remove_duplicate(url, content):
             continue
 
         seen_token.add(content)

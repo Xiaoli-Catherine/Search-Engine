@@ -222,6 +222,7 @@ def calculate_balance_weight(cos_score, sum_tfidf):
 **************************
 calculate the "phrase weight" that the query q in the document D, 
 compare every two tokens,if they happened in the same order in a document
+if so phrase_weight++
 **************************
 """
 def get_phrase_weight(term_id_list, term_postings, query):
@@ -278,7 +279,9 @@ set bata = 0.5
 **********************
 """      
 def ranked_search(term_id_list, term_postings, query, n, df):
+    # (tf_idf_q * tf_idf_d) /sqrt(tf_idf_d * tf_idf_d)
     cos_score = consine_score(term_postings, query, n, df)
+    # tfidf * (1 + weight)
     sum_tfidf = sum_of_tf_idf(term_id_list, term_postings, query)
     
     # bata * sum_tfidf + (1-bata)* cos_score, 
@@ -287,8 +290,9 @@ def ranked_search(term_id_list, term_postings, query, n, df):
 
     phrase_weight = get_phrase_weight(term_id_list, term_postings, query)
     
+    #   tfidf_and_soc * (1+ phrase)
     final_result = calculate_result(weight_tfidf_and_soc, phrase_weight)
-
+ 
     final_result = sorted(final_result, key=lambda d: final_result[d], reverse = True)
     return final_result
 
@@ -321,8 +325,11 @@ def search_doc(query: str, high_fre_term, url_data, lex_data, doc_len):
         url_list.append(doc_url)
 
     print("="*60)
-    print(f"\nTop 5 url is: {url_list}\n")
-
+    # print(f"\nTop 5 url is: {url_list}\n")
+    print("\nTop 5 URLs are:")
+    for url in url_list:
+        print(url)
+    
     end = time.perf_counter()
     elapsed_ms = (end - start) * 1000  # seconds → ms
     
