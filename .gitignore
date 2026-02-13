@@ -1,0 +1,42 @@
+cat > .gitignore << 'EOF'
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.mypy_cache/
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+env/
+DEV/
+
+# IDE/OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs & temp
+*.log
+logs/
+tmp/
+.cache/
+
+# Project artifacts (DON'T commit crawled data / caches / large outputs)
+data/
+datasets/
+dataset*/
+cache/
+corpus/
+pages/
+raw/
+downloads/
+output/
+out/
+index/
+live_seen_url.txt
+.ipynb_checkpoints/
+build/
+dist/
+EOF
